@@ -3,17 +3,21 @@ package httpreq
 import (
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path"
+	"strings"
 	"testing"
 
 	"github.com/go-acme/lego/v3/platform/tester"
 	"github.com/stretchr/testify/require"
 )
 
-var envTest = tester.NewEnvTest("HTTPREQ_ENDPOINT", "HTTPREQ_MODE", "HTTPREQ_USERNAME", "HTTPREQ_PASSWORD")
+var envTest = tester.NewEnvTest("HTTPREQ_ENDPOINT", "HTTPREQ_MODE", "HTTPREQ_USERNAME", "HTTPREQ_PASSWORD",
+	"HTTPREQ_USERNAME_FILE", "HTTPREQ_PASSWORD_FILE")
 
 func TestNewDNSProvider(t *testing.T) {
 	testCases := []struct {
@@ -56,6 +60,66 @@ func TestNewDNSProvider(t *testing.T) {
 				require.NoError(t, err)
 				require.NotNil(t, p)
 				require.NotNil(t, p.config)
+			} else {
+				require.EqualError(t, err, test.expected)
+			}
+		})
+	}
+}
+
+func TestNewDNSProvider_file(t *testing.T) {
+	testCases := []struct {
+		desc     string
+		envVars  map[string]string
+		env      string
+		expected string
+	}{
+		{
+			desc: "username and password without _FILE",
+			envVars: map[string]string{
+				"HTTPREQ_USERNAME": "username",
+				"HTTPREQ_PASSWORD": "password",
+			},
+		},
+		{
+			desc: "username and password with _FILE",
+			envVars: map[string]string{
+				"HTTPREQ_USERNAME_FILE": "username-file",
+				"HTTPREQ_PASSWORD_FILE": "password-file",
+			},
+		},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.desc, func(t *testing.T) {
+			filevars := [2]string{"USERNAME", "PASSWORD"}
+			for _, f := range filevars {
+				filevar := "HTTPREQ_" + f + "_FILE"
+				if filename, ok := test.envVars[filevar]; ok {
+					file, err := ioutil.TempFile("", filename)
+					require.NoError(t, err)
+					defer os.Remove(file.Name())
+					err = ioutil.WriteFile(file.Name(), []byte(strings.ToLower(f)+"\n"), 0644)
+					require.NoError(t, err)
+					test.envVars[filevar] = file.Name()
+				}
+			}
+
+			test.envVars["HTTPREQ_ENDPOINT"] = "http://localhost:8090"
+
+			defer envTest.RestoreEnv()
+			envTest.ClearEnv()
+
+			envTest.Apply(test.envVars)
+
+			p, err := NewDNSProvider()
+
+			if len(test.expected) == 0 {
+				require.NoError(t, err)
+				require.NotNil(t, p)
+				require.NotNil(t, p.config)
+				require.Equal(t, "username", p.config.Username)
+				require.Equal(t, "password", p.config.Password)
 			} else {
 				require.EqualError(t, err, test.expected)
 			}
